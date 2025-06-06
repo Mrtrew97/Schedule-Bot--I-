@@ -6,6 +6,8 @@ import pytz
 import os
 import json
 from dotenv import load_dotenv
+from aiohttp import web
+import asyncio
 
 load_dotenv()
 
@@ -256,4 +258,26 @@ async def on_reaction_add(reaction, user):
                     except (discord.Forbidden, discord.HTTPException):
                         pass
 
-bot.run(TOKEN)
+
+# === Minimal aiohttp webserver for Render ===
+app = web.Application()
+
+async def handle(request):
+    return web.Response(text="Bot is running")
+
+app.router.add_get("/", handle)
+
+async def run_webserver():
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))  # Render sets PORT env var
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+# Run webserver and bot concurrently
+async def main():
+    await run_webserver()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
