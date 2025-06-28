@@ -13,8 +13,8 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 APP_ID = int(os.getenv("APPLICATION_ID"))
 GUILD_ID = int(os.getenv("GUILD_ID"))
-EVENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # your .env uses CHANNEL_ID for events channel
-COMMANDS_CHANNEL_ID = int(os.getenv("COMMAND_CHANNEL_ID"))  # only commands from here count
+EVENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+COMMANDS_CHANNEL_ID = int(os.getenv("COMMAND_CHANNEL_ID"))
 ROLE_ID_HOME_KINGDOM = int(os.getenv("ROLE_ID_HOME_KINGDOM"))
 
 intents = discord.Intents.default()
@@ -69,15 +69,9 @@ def parse_datetime(time_str, date_str=None):
 # === Command to schedule any event type ===
 @bot.command(name="schedule")
 async def schedule(ctx, event_type: str, time_utc: str, *args):
-    # Only accept commands from specific channel
     if ctx.channel.id != COMMANDS_CHANNEL_ID:
         return
 
-    """
-    Usage:
-    /schedule hydra 19:00 "Zone 3 Push"
-    /schedule caravan 19:00 13/06/2025 "Caravan Event"
-    """
     date_str = None
     event_name = ""
 
@@ -118,15 +112,10 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         time_remaining = f"{hours} hours {minutes} minutes"
 
     mention = f"<@&{ROLE_ID_HOME_KINGDOM}>"
-    
-    # Windows-compatible date formatting for strftime (avoid %-d, %-I)
+
     def format_dt(dt_obj):
-        # Day without leading zero
         day = dt_obj.day
-        # Hour (12-hour format) without leading zero
-        hour = dt_obj.strftime("%I").lstrip("0")
-        if hour == "":
-            hour = "0"
+        hour = dt_obj.strftime("%I").lstrip("0") or "0"
         return dt_obj.strftime(f"%A, %B {day}, %Y {hour}:%M %p")
 
     formatted_time = format_dt(dt)
@@ -136,7 +125,6 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         await ctx.send("Events channel not found. Please check configuration.")
         return
 
-    # --- EMBED for scheduled event ---
     embed = discord.Embed(
         title=f"🛡️ Scheduled {event_type.capitalize()}",
         description=f"{event_name}",
@@ -146,7 +134,7 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
     embed.add_field(name="⏳ Time Remaining", value=time_remaining, inline=False)
     embed.add_field(name="🗳️ React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
     embed.set_footer(text=f"Event ID: {event_id}")
-    embed.timestamp = dt  # show UTC time in embed footer timestamp
+    embed.timestamp = dt
 
     msg = await channel.send(content=mention, embed=embed)
 
@@ -172,14 +160,12 @@ async def check_events():
             total_seconds = delta.total_seconds()
 
             if total_seconds < -60:
-                # Event passed more than 1 minute ago; optionally skip or clean up
                 continue
 
             reminders_sent = json.loads(reminders_json) if reminders_json else []
-
             reminders_to_check = []
 
-            if total_seconds > 3600:  # More than 1 hour left
+            if total_seconds > 3600:
                 halfway = total_seconds / 2
                 if halfway > 60:
                     reminders_to_check.append(("halfway", halfway))
@@ -195,17 +181,13 @@ async def check_events():
                 reminders_to_check.extend([
                     ("30m", 1800),
                     ("15m", 900)
-                    
                 ])
 
-            # Add the final event time ping
-            # Only send once, mark with "start"
             if "start" not in reminders_sent and -60 <= total_seconds <= 0:
                 reminders_to_check.append(("start", 0))
 
             due_reminders = []
             for name_r, seconds_before in reminders_to_check:
-                # For "start" reminder, seconds_before == 0, trigger if within -60 to 0 seconds
                 if name_r == "start":
                     if -60 <= total_seconds <= 0:
                         due_reminders.append(name_r)
@@ -221,109 +203,68 @@ async def check_events():
                 mention = f"<@&{ROLE_ID_HOME_KINGDOM}>"
 
                 for reminder in due_reminders:
-                    # Compose embed message for each reminder type
+                    embed = discord.Embed(color=discord.Color.green())
+                    timestamp = f"<t:{int(event_time.timestamp())}:F>"
+
                     if reminder == "halfway":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: {event_type.capitalize()} Halfway There!",
-                            description=f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.orange()
-                        )
-                        embed.set_footer(text="Get ready!")
-                        await channel.send(content=mention, embed=embed)
+                        embed.title = f"⏰ Reminder: {event_type.capitalize()} Halfway There!"
+                        embed.description = f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at {timestamp}"
+                        embed.color = discord.Color.orange()
 
-                    elif reminder == "12h":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 12 Hours Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 12 hours.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.dark_orange()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "6h":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 6 Hours Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 6 hours.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.gold()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "3h":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 3 Hours Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 3 hours.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.gold()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "1h":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 1 Hour Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 1 hour.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.green()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "30m":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 30 Minutes Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 30 minutes.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.green()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "15m":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 15 Minutes Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 15 minutes.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.green()
-                        )
-                        await channel.send(content=mention, embed=embed)
-
-                    elif reminder == "10m":
-                        embed = discord.Embed(
-                            title=f"⏰ Reminder: 10 Minutes Left",
-                            description=f"Event **{event_type.capitalize()} - {name}** starts in 10 minutes.\nTime: <t:{int(event_time.timestamp())}:F>",
-                            color=discord.Color.green()
-                        )
-                        await channel.send(content=mention, embed=embed)
+                    elif reminder in ["12h", "6h", "3h", "1h", "30m", "15m", "10m"]:
+                        hrs = reminder if "h" in reminder else f"{int(int(reminder[:-1]) / 60)}h" if "m" in reminder else reminder
+                        embed.title = f"⏰ Reminder: {reminder.replace('m',' Minutes').replace('h',' Hours')} Left"
+                        embed.description = f"Event **{event_type.capitalize()} - {name}** starts in {reminder.replace('m',' minutes').replace('h',' hours')}.\nTime: {timestamp}"
+                        embed.color = discord.Color.green()
 
                     elif reminder == "start":
-                        embed = discord.Embed(
-                            title=f"🚨 {event_type.capitalize()} Started!",
-                            description=f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**",
-                            color=discord.Color.red()
-                        )
-                        await channel.send(content=mention, embed=embed)
+                        embed.title = f"🚨 {event_type.capitalize()} Started!"
+                        embed.description = f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**"
+                        embed.color = discord.Color.red()
+
+                    embed.set_footer(text="Get ready!" if reminder != "start" else "")
+                    await channel.send(content=mention, embed=embed)
 
                 reminders_sent.extend(due_reminders)
-                reminders_sent_json = json.dumps(reminders_sent)
-                await db.execute("UPDATE events SET reminders_sent = ? WHERE id = ?", (reminders_sent_json, event_id))
+                await db.execute("UPDATE events SET reminders_sent = ? WHERE id = ?", (json.dumps(reminders_sent), event_id))
                 await db.commit()
 
-# === Reaction handler to enforce single vote per user and keep reaction counts intact ===
+# === Reaction handler ===
 @bot.event
 async def on_reaction_add(reaction, user):
-    if user.bot:
+    if user.bot or reaction.message.channel.id != EVENTS_CHANNEL_ID:
         return
 
-    # Only enforce reactions on event messages in the EVENTS_CHANNEL_ID
-    if reaction.message.channel.id != EVENTS_CHANNEL_ID:
-        return
-
-    # Allowed vote emojis
     vote_emojis = {"✅", "❌", "❓"}
     if reaction.emoji not in vote_emojis:
         return
 
-    message = reaction.message
-    # Remove other votes by the same user on this message
-    for react in message.reactions:
+    for react in reaction.message.reactions:
         if react.emoji != reaction.emoji and react.emoji in vote_emojis:
             async for u in react.users():
                 if u.id == user.id:
                     try:
-                        await message.remove_reaction(react.emoji, user)
+                        await reaction.message.remove_reaction(react.emoji, user)
                     except (discord.Forbidden, discord.HTTPException):
                         pass
 
-bot.run(TOKEN)
+# === Web Server for Render Health Check ===
+import asyncio
+from aiohttp import web
+
+async def handle_healthcheck(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_healthcheck)
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+async def main():
+    await asyncio.gather(bot.start(TOKEN), start_web_server())
+
+asyncio.run(main())
