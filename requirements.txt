@@ -2,3 +2,4 @@ discord.py
 aiosqlite
 pytz
 python-dotenv
+aiohttp
