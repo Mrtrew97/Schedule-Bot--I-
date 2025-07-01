@@ -6,6 +6,8 @@ import pytz
 import os
 import json
 from dotenv import load_dotenv
+import asyncio
+from aiohttp import web
 
 load_dotenv()
 
@@ -112,13 +114,7 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         time_remaining = f"{hours} hours {minutes} minutes"
 
     mention = f"<@&{ROLE_ID_HOME_KINGDOM}>"
-
-    def format_dt(dt_obj):
-        day = dt_obj.day
-        hour = dt_obj.strftime("%I").lstrip("0") or "0"
-        return dt_obj.strftime(f"%A, %B {day}, %Y {hour}:%M %p")
-
-    formatted_time = format_dt(dt)
+    formatted_time = f"<t:{int(dt.timestamp())}:F>"
 
     channel = bot.get_channel(EVENTS_CHANNEL_ID)
     if not channel:
@@ -126,13 +122,14 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         return
 
     embed = discord.Embed(
-        title=f"🛡️ Scheduled {event_type.capitalize()}",
+        title=f"\U0001F6E1\uFE0F Scheduled {event_type.capitalize()}",
         description=f"{event_name}",
         color=discord.Color.gold()
     )
-    embed.add_field(name="🕒 Time", value=formatted_time, inline=False)
-    embed.add_field(name="⏳ Time Remaining", value=time_remaining, inline=False)
-    embed.add_field(name="🗳️ React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
+    embed.add_field(name="\U0001F552 Time", value=formatted_time, inline=False)
+    embed.add_field(name="\u23F3 Time Remaining", value=time_remaining, inline=False)
+    embed.add_field(name="\U0001F5F3\uFE0F React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
+    # Fixed footer: just event ID and dynamic time separated by bullet
     embed.set_footer(text=f"Event ID: {event_id}")
     embed.timestamp = dt
 
@@ -207,18 +204,17 @@ async def check_events():
                     timestamp = f"<t:{int(event_time.timestamp())}:F>"
 
                     if reminder == "halfway":
-                        embed.title = f"⏰ Reminder: {event_type.capitalize()} Halfway There!"
+                        embed.title = f"\u23F0 Reminder: {event_type.capitalize()} Halfway There!"
                         embed.description = f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at {timestamp}"
                         embed.color = discord.Color.orange()
 
                     elif reminder in ["12h", "6h", "3h", "1h", "30m", "15m", "10m"]:
-                        hrs = reminder if "h" in reminder else f"{int(int(reminder[:-1]) / 60)}h" if "m" in reminder else reminder
-                        embed.title = f"⏰ Reminder: {reminder.replace('m',' Minutes').replace('h',' Hours')} Left"
+                        embed.title = f"\u23F0 Reminder: {reminder.replace('m',' Minutes').replace('h',' Hours')} Left"
                         embed.description = f"Event **{event_type.capitalize()} - {name}** starts in {reminder.replace('m',' minutes').replace('h',' hours')}.\nTime: {timestamp}"
                         embed.color = discord.Color.green()
 
                     elif reminder == "start":
-                        embed.title = f"🚨 {event_type.capitalize()} Started!"
+                        embed.title = f"\ud83d\udea8 {event_type.capitalize()} Started!"
                         embed.description = f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**"
                         embed.color = discord.Color.red()
 
@@ -249,9 +245,6 @@ async def on_reaction_add(reaction, user):
                         pass
 
 # === Web Server for Render Health Check ===
-import asyncio
-from aiohttp import web
-
 async def handle_healthcheck(request):
     return web.Response(text="Bot is running!")
 
