@@ -48,8 +48,9 @@ async def setup_database():
 @bot.event
 async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user}")
-    await setup_database()
-    check_events.start()
+    # Don't setup db or start task here because we do that in main()
+    # await setup_database()
+    # check_events.start()
 
 # === Helper: parse datetime from input ===
 def parse_datetime(time_str, date_str=None):
@@ -279,4 +280,27 @@ async def check_events():
                     )
                     await db.commit()
 
-bot.run(TOKEN)
+# === Minimal aiohttp webserver for Render health checks ===
+async def handle(request):
+    return web.Response(text="OK")
+
+async def start_webserver():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Webserver started on port {port}")
+
+# === Main async entrypoint ===
+async def main():
+    await setup_database()
+    check_events.start()
+    await start_webserver()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
