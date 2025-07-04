@@ -39,7 +39,8 @@ async def setup_database():
                 event_time TEXT,
                 channel_id INTEGER,
                 message_id INTEGER,
-                reminders_sent TEXT DEFAULT '[]'
+                reminders_sent TEXT DEFAULT '[]',
+                last_reminder_msg_id INTEGER
             )
         """)
         await db.commit()
@@ -148,15 +149,27 @@ async def check_events():
     now = datetime.now(timezone.utc)
 
     async with aiosqlite.connect("events.db") as db:
-        async with db.execute("SELECT id, event_type, event_name, event_time, channel_id, reminders_sent FROM events") as cursor:
+        async with db.execute(
+            "SELECT id, event_type, event_name, event_time, channel_id, reminders_sent, message_id, last_reminder_msg_id FROM events"
+        ) as cursor:
             rows = await cursor.fetchall()
 
-        for event_id, event_type, name, iso_time, channel_id, reminders_json in rows:
+        for (
+            event_id,
+            event_type,
+            name,
+            iso_time,
+            channel_id,
+            reminders_json,
+            message_id,
+            last_reminder_msg_id,
+        ) in rows:
             event_time = datetime.fromisoformat(iso_time).replace(tzinfo=timezone.utc)
             delta = event_time - now
             total_seconds = delta.total_seconds()
 
             if total_seconds < -60:
+                # Skip past events
                 continue
 
             reminders_sent = json.loads(reminders_json) if reminders_json else []
@@ -166,19 +179,18 @@ async def check_events():
                 halfway = total_seconds / 2
                 if halfway > 60:
                     reminders_to_check.append(("halfway", halfway))
-                reminders_to_check.extend([
-                    ("12h", 43200),
-                    ("6h", 21600),
-                    ("3h", 10800),
-                    ("1h", 3600),
-                    ("30m", 1800),
-                    ("10m", 600)
-                ])
+                reminders_to_check.extend(
+                    [
+                        ("12h", 43200),
+                        ("6h", 21600),
+                        ("3h", 10800),
+                        ("1h", 3600),
+                        ("30m", 1800),
+                        ("10m", 600),
+                    ]
+                )
             else:
-                reminders_to_check.extend([
-                    ("30m", 1800),
-                    ("15m", 900)
-                ])
+                reminders_to_check.extend([("30m", 1800), ("15m", 900)])
 
             if "start" not in reminders_sent and -60 <= total_seconds <= 0:
                 reminders_to_check.append(("start", 0))
@@ -189,7 +201,10 @@ async def check_events():
                     if -60 <= total_seconds <= 0:
                         due_reminders.append(name_r)
                 else:
-                    if name_r not in reminders_sent and 0 <= total_seconds - seconds_before < 60:
+                    if (
+                        name_r not in reminders_sent
+                        and 0 <= total_seconds - seconds_before < 60
+                    ):
                         due_reminders.append(name_r)
 
             if due_reminders:
@@ -205,59 +220,108 @@ async def check_events():
 
                     if reminder == "halfway":
                         embed.title = f"\u23F0 Reminder: {event_type.capitalize()} Halfway There!"
-                        embed.description = f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at {timestamp}"
+                        embed.description = (
+                            f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at {timestamp}"
+                        )
                         embed.color = discord.Color.orange()
 
-                    elif reminder in ["12h", "6h", "3h", "1h", "30m", "15m", "10m"]:
-                        embed.title = f"\u23F0 Reminder: {reminder.replace('m',' Minutes').replace('h',' Hours')} Left"
-                        embed.description = f"Event **{event_type.capitalize()} - {name}** starts in {reminder.replace('m',' minutes').replace('h',' hours')}.\nTime: {timestamp}"
+                    elif reminder in [
+                        "12h",
+                        "6h",
+                        "3h",
+                        "1h",
+                        "30m",
+                        "10m",
+                        "15m",
+                    ]:
+                        # Format time nicely for embed title
+                        time_str = reminder.replace("m", " Minutes").replace("h", " Hours")
+                        embed.title = f"\u23F0 Reminder: {time_str} Left"
+                        embed.description = (
+                            f"Event **{event_type.capitalize()} - {name}** starts in {time_str}.\nTime: {timestamp}"
+                        )
                         embed.color = discord.Color.green()
 
                     elif reminder == "start":
                         embed.title = f"\ud83d\udea8 {event_type.capitalize()} Started!"
-                        embed.description = f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**"
+                        embed.description = (
+                            f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**"
+                        )
                         embed.color = discord.Color.red()
 
                     embed.set_footer(text="Get ready!" if reminder != "start" else "")
-                    await channel.send(content=mention, embed=embed)
 
-                reminders_sent.extend(due_reminders)
-                await db.execute("UPDATE events SET reminders_sent = ? WHERE id = ?", (json.dumps(reminders_sent), event_id))
-                await db.commit()
+                    # --- Delete previous reminder message before sending new one ---
+                    if last_reminder_msg_id:
+                        try:
+                            old_msg = await channel.fetch_message(last_reminder_msg_id)
+                            await old_msg.delete()
+                        except discord.NotFound:
+                            pass
 
-# === Reaction handler ===
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot or reaction.message.channel.id != EVENTS_CHANNEL_ID:
+                    reminder_msg = await channel.send(content=mention, embed=embed)
+
+                    # Update last_reminder_msg_id in DB
+                    await db.execute(
+                        "UPDATE events SET last_reminder_msg_id = ? WHERE id = ?",
+                        (reminder_msg.id, event_id),
+                    )
+                    await db.commit()
+
+                    # If this is the start reminder, schedule deletions
+                    if reminder == "start":
+
+                        async def delete_messages():
+                            # Delete the start reminder after 10 minutes
+                            await asyncio.sleep(600)
+                            try:
+                                msg_to_delete = await channel.fetch_message(reminder_msg.id)
+                                await msg_to_delete.delete()
+                            except discord.NotFound:
+                                pass
+                            # Delete the original event message immediately after start
+                            try:
+                                orig_msg = await channel.fetch_message(message_id)
+                                await orig_msg.delete()
+                            except discord.NotFound:
+                                pass
+
+                        asyncio.create_task(delete_messages())
+
+                    # Update reminders_sent in DB
+                    reminders_sent.append(reminder)
+                    await db.execute(
+                        "UPDATE events SET reminders_sent = ? WHERE id = ?",
+                        (json.dumps(reminders_sent), event_id),
+                    )
+                    await db.commit()
+
+# === Command to cancel scheduled event ===
+@bot.command(name="cancel")
+async def cancel(ctx, event_id: int):
+    if ctx.channel.id != COMMANDS_CHANNEL_ID:
         return
 
-    vote_emojis = {"✅", "❌", "❓"}
-    if reaction.emoji not in vote_emojis:
-        return
+    async with aiosqlite.connect("events.db") as db:
+        async with db.execute("SELECT message_id FROM events WHERE id = ?", (event_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await ctx.send(f"Event ID {event_id} not found.")
+            return
 
-    for react in reaction.message.reactions:
-        if react.emoji != reaction.emoji and react.emoji in vote_emojis:
-            async for u in react.users():
-                if u.id == user.id:
-                    try:
-                        await reaction.message.remove_reaction(react.emoji, user)
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
+        message_id = row[0]
+        channel = bot.get_channel(EVENTS_CHANNEL_ID)
 
-# === Web Server for Render Health Check ===
-async def handle_healthcheck(request):
-    return web.Response(text="Bot is running!")
+        if message_id and channel:
+            try:
+                msg = await channel.fetch_message(message_id)
+                await msg.delete()
+            except discord.NotFound:
+                pass
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_healthcheck)
-    port = int(os.environ.get("PORT", 8080))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+        await db.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        await db.commit()
+        await ctx.send(f"Event ID {event_id} has been cancelled and removed.")
 
-async def main():
-    await asyncio.gather(bot.start(TOKEN), start_web_server())
-
-asyncio.run(main())
+# === Run the bot ===
+bot.run(TOKEN)
