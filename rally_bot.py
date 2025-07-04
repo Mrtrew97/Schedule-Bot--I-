@@ -130,7 +130,6 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
     embed.add_field(name="\U0001F552 Time", value=formatted_time, inline=False)
     embed.add_field(name="\u23F3 Time Remaining", value=time_remaining, inline=False)
     embed.add_field(name="\U0001F5F3\uFE0F React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
-    # Fixed footer: just event ID and dynamic time separated by bullet
     embed.set_footer(text=f"Event ID: {event_id}")
     embed.timestamp = dt
 
@@ -234,7 +233,6 @@ async def check_events():
                         "10m",
                         "15m",
                     ]:
-                        # Format time nicely for embed title
                         time_str = reminder.replace("m", " Minutes").replace("h", " Hours")
                         embed.title = f"\u23F0 Reminder: {time_str} Left"
                         embed.description = (
@@ -323,5 +321,25 @@ async def cancel(ctx, event_id: int):
         await db.commit()
         await ctx.send(f"Event ID {event_id} has been cancelled and removed.")
 
-# === Run the bot ===
-bot.run(TOKEN)
+# === Webserver for Render health checks ===
+async def handle_health(request):
+    return web.Response(text="OK")
+
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", handle_health)
+    port = int(os.getenv("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Webserver running on port {port}")
+
+# === Main async entrypoint ===
+async def main():
+    await setup_database()
+    await start_webserver()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
