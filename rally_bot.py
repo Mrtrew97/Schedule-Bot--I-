@@ -19,6 +19,8 @@ EVENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 COMMANDS_CHANNEL_ID = int(os.getenv("COMMAND_CHANNEL_ID"))
 ROLE_ID_HOME_KINGDOM = int(os.getenv("ROLE_ID_HOME_KINGDOM"))
 
+PORT = int(os.getenv("PORT", 8080))  # Load port from env, default 8080
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -130,7 +132,6 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
     embed.add_field(name="\U0001F552 Time", value=formatted_time, inline=False)
     embed.add_field(name="\u23F3 Time Remaining", value=time_remaining, inline=False)
     embed.add_field(name="\U0001F5F3\uFE0F React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
-    # Fixed footer: just event ID and dynamic time separated by bullet
     embed.set_footer(text=f"Event ID: {event_id}")
     embed.timestamp = dt
 
@@ -234,7 +235,6 @@ async def check_events():
                         "10m",
                         "15m",
                     ]:
-                        # Format time nicely for embed title
                         time_str = reminder.replace("m", " Minutes").replace("h", " Hours")
                         embed.title = f"\u23F0 Reminder: {time_str} Left"
                         embed.description = (
@@ -323,5 +323,26 @@ async def cancel(ctx, event_id: int):
         await db.commit()
         await ctx.send(f"Event ID {event_id} has been cancelled and removed.")
 
-# === Run the bot ===
-bot.run(TOKEN)
+# === Simple web server for Render health checks ===
+async def handle(request):
+    return web.Response(text="OK")
+
+async def start_webserver():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    print(f"Web server running on port {PORT}")
+
+# === Run bot + webserver concurrently ===
+async def main():
+    await bot.wait_until_ready()
+    await setup_database()
+    check_events.start()
+    await start_webserver()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
