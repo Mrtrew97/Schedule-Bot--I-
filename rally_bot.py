@@ -103,17 +103,6 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         row = await cursor.fetchone()
         event_id = row[0]
 
-    time_delta = dt - datetime.now(timezone.utc)
-    total_seconds = int(time_delta.total_seconds())
-    days = total_seconds // 86400
-    hours = (total_seconds % 86400) // 3600
-    minutes = (total_seconds % 3600) // 60
-
-    if days > 0:
-        time_remaining = f"{days} days {hours} hours {minutes} minutes"
-    else:
-        time_remaining = f"{hours} hours {minutes} minutes"
-
     mention = f"<@&{ROLE_ID_HOME_KINGDOM}>"
     formatted_time = f"<t:{int(dt.timestamp())}:F>"
 
@@ -123,14 +112,13 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         return
 
     embed = discord.Embed(
-        title=f"\U0001F6E1\uFE0F Scheduled {event_type.capitalize()}",
+        title=f"\U0001F6E1️ Scheduled {event_type.capitalize()}",
         description=f"{event_name}",
         color=discord.Color.gold()
     )
     embed.add_field(name="\U0001F552 Time", value=formatted_time, inline=False)
-    embed.add_field(name="\u23F3 Time Remaining", value=time_remaining, inline=False)
-    embed.add_field(name="\U0001F5F3\uFE0F React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
-    # Fixed footer: just event ID and dynamic time separated by bullet
+    embed.add_field(name="⏳ Time Remaining", value=f"<t:{int(dt.timestamp())}:R>", inline=False)
+    embed.add_field(name="\U0001F5F3️ React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
     embed.set_footer(text=f"Event ID: {event_id}")
     embed.timestamp = dt
 
@@ -169,7 +157,6 @@ async def check_events():
             total_seconds = delta.total_seconds()
 
             if total_seconds < -60:
-                # Skip past events
                 continue
 
             reminders_sent = json.loads(reminders_json) if reminders_json else []
@@ -219,31 +206,23 @@ async def check_events():
                     timestamp = f"<t:{int(event_time.timestamp())}:F>"
 
                     if reminder == "halfway":
-                        embed.title = f"\u23F0 Reminder: {event_type.capitalize()} Halfway There!"
+                        embed.title = f"⏰ Reminder: {event_type.capitalize()} Halfway There!"
                         embed.description = (
                             f"Event **{event_type.capitalize()} - {name}** is halfway there!\nHappening at {timestamp}"
                         )
                         embed.color = discord.Color.orange()
 
                     elif reminder in [
-                        "12h",
-                        "6h",
-                        "3h",
-                        "1h",
-                        "30m",
-                        "10m",
-                        "15m",
-                    ]:
-                        # Format time nicely for embed title
+                        "12h", "6h", "3h", "1h", "30m", "10m", "15m"]:
                         time_str = reminder.replace("m", " Minutes").replace("h", " Hours")
-                        embed.title = f"\u23F0 Reminder: {time_str} Left"
+                        embed.title = f"⏰ Reminder: {time_str} Left"
                         embed.description = (
                             f"Event **{event_type.capitalize()} - {name}** starts in {time_str}.\nTime: {timestamp}"
                         )
                         embed.color = discord.Color.green()
 
                     elif reminder == "start":
-                        embed.title = f"\ud83d\udea8 {event_type.capitalize()} Started!"
+                        embed.title = f"🚨 {event_type.capitalize()} Started!"
                         embed.description = (
                             f"**{event_type.capitalize()} - {name} IS NOW!!! LET'S DO THIS!!**"
                         )
@@ -251,7 +230,6 @@ async def check_events():
 
                     embed.set_footer(text="Get ready!" if reminder != "start" else "")
 
-                    # --- Delete previous reminder message before sending new one ---
                     if last_reminder_msg_id:
                         try:
                             old_msg = await channel.fetch_message(last_reminder_msg_id)
@@ -261,25 +239,21 @@ async def check_events():
 
                     reminder_msg = await channel.send(content=mention, embed=embed)
 
-                    # Update last_reminder_msg_id in DB
                     await db.execute(
                         "UPDATE events SET last_reminder_msg_id = ? WHERE id = ?",
                         (reminder_msg.id, event_id),
                     )
                     await db.commit()
 
-                    # If this is the start reminder, schedule deletions
                     if reminder == "start":
 
                         async def delete_messages():
-                            # Delete the start reminder after 10 minutes
                             await asyncio.sleep(600)
                             try:
                                 msg_to_delete = await channel.fetch_message(reminder_msg.id)
                                 await msg_to_delete.delete()
                             except discord.NotFound:
                                 pass
-                            # Delete the original event message immediately after start
                             try:
                                 orig_msg = await channel.fetch_message(message_id)
                                 await orig_msg.delete()
@@ -288,7 +262,6 @@ async def check_events():
 
                         asyncio.create_task(delete_messages())
 
-                    # Update reminders_sent in DB
                     reminders_sent.append(reminder)
                     await db.execute(
                         "UPDATE events SET reminders_sent = ? WHERE id = ?",
