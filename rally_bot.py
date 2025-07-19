@@ -18,6 +18,7 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 EVENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 COMMANDS_CHANNEL_ID = int(os.getenv("COMMAND_CHANNEL_ID"))
 ROLE_ID_HOME_KINGDOM = int(os.getenv("ROLE_ID_HOME_KINGDOM"))
+PORT = int(os.getenv("PORT", 4000))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -45,11 +46,24 @@ async def setup_database():
         """)
         await db.commit()
 
+# === Web server for Render health check ===
+async def handle(request):
+    return web.Response(text="OK")
+
+async def start_web_app():
+    app = web.Application()
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
 @bot.event
 async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user}")
     await setup_database()
     check_events.start()
+    await start_web_app()
 
 # === Helper: parse datetime from input ===
 def parse_datetime(time_str, date_str=None):
