@@ -48,9 +48,8 @@ async def setup_database():
 @bot.event
 async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user}")
-    # Don't setup db or start task here because we do that in main()
-    # await setup_database()
-    # check_events.start()
+    await setup_database()
+    check_events.start()
 
 # === Helper: parse datetime from input ===
 def parse_datetime(time_str, date_str=None):
@@ -70,7 +69,7 @@ def parse_datetime(time_str, date_str=None):
         print(f"Error parsing datetime: {e}")
         return None
 
-# === Command to schedule any event type (with UNIX timestamp countdown) ===
+# === Command to schedule any event type ===
 @bot.command(name="schedule")
 async def schedule(ctx, event_type: str, time_utc: str, *args):
     if ctx.channel.id != COMMANDS_CHANNEL_ID:
@@ -104,10 +103,19 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         row = await cursor.fetchone()
         event_id = row[0]
 
-    formatted_time = f"<t:{int(dt.timestamp())}:F>"  # e.g. Saturday, July 5, 2025 10:00 PM
-    time_remaining = f"<t:{int(dt.timestamp())}:R>"  # Relative countdown like "in 1 day"
+    time_delta = dt - datetime.now(timezone.utc)
+    total_seconds = int(time_delta.total_seconds())
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+
+    if days > 0:
+        time_remaining = f"{days} days {hours} hours {minutes} minutes"
+    else:
+        time_remaining = f"{hours} hours {minutes} minutes"
 
     mention = f"<@&{ROLE_ID_HOME_KINGDOM}>"
+    formatted_time = f"<t:{int(dt.timestamp())}:F>"
 
     channel = bot.get_channel(EVENTS_CHANNEL_ID)
     if not channel:
@@ -119,9 +127,10 @@ async def schedule(ctx, event_type: str, time_utc: str, *args):
         description=f"{event_name}",
         color=discord.Color.gold()
     )
-    embed.add_field(name="🕒 Time", value=formatted_time, inline=False)
-    embed.add_field(name="⏳ Time Remaining", value=time_remaining, inline=False)
-    embed.add_field(name="🗳️ React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
+    embed.add_field(name="\U0001F552 Time", value=formatted_time, inline=False)
+    embed.add_field(name="\u23F3 Time Remaining", value=time_remaining, inline=False)
+    embed.add_field(name="\U0001F5F3\uFE0F React with:", value="✅ — Yes\n❌ — No\n❓ — Maybe", inline=False)
+    # Fixed footer: just event ID and dynamic time separated by bullet
     embed.set_footer(text=f"Event ID: {event_id}")
     embed.timestamp = dt
 
@@ -225,6 +234,7 @@ async def check_events():
                         "10m",
                         "15m",
                     ]:
+                        # Format time nicely for embed title
                         time_str = reminder.replace("m", " Minutes").replace("h", " Hours")
                         embed.title = f"\u23F0 Reminder: {time_str} Left"
                         embed.description = (
@@ -241,6 +251,7 @@ async def check_events():
 
                     embed.set_footer(text="Get ready!" if reminder != "start" else "")
 
+                    # --- Delete previous reminder message before sending new one ---
                     if last_reminder_msg_id:
                         try:
                             old_msg = await channel.fetch_message(last_reminder_msg_id)
@@ -250,21 +261,25 @@ async def check_events():
 
                     reminder_msg = await channel.send(content=mention, embed=embed)
 
+                    # Update last_reminder_msg_id in DB
                     await db.execute(
                         "UPDATE events SET last_reminder_msg_id = ? WHERE id = ?",
                         (reminder_msg.id, event_id),
                     )
                     await db.commit()
 
+                    # If this is the start reminder, schedule deletions
                     if reminder == "start":
 
                         async def delete_messages():
+                            # Delete the start reminder after 10 minutes
                             await asyncio.sleep(600)
                             try:
                                 msg_to_delete = await channel.fetch_message(reminder_msg.id)
                                 await msg_to_delete.delete()
                             except discord.NotFound:
                                 pass
+                            # Delete the original event message immediately after start
                             try:
                                 orig_msg = await channel.fetch_message(message_id)
                                 await orig_msg.delete()
@@ -273,6 +288,7 @@ async def check_events():
 
                         asyncio.create_task(delete_messages())
 
+                    # Update reminders_sent in DB
                     reminders_sent.append(reminder)
                     await db.execute(
                         "UPDATE events SET reminders_sent = ? WHERE id = ?",
@@ -280,27 +296,32 @@ async def check_events():
                     )
                     await db.commit()
 
-# === Minimal aiohttp webserver for Render health checks ===
-async def handle(request):
-    return web.Response(text="OK")
+# === Command to cancel scheduled event ===
+@bot.command(name="cancel")
+async def cancel(ctx, event_id: int):
+    if ctx.channel.id != COMMANDS_CHANNEL_ID:
+        return
 
-async def start_webserver():
-    app = web.Application()
-    app.add_routes([web.get('/', handle)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"Webserver started on port {port}")
+    async with aiosqlite.connect("events.db") as db:
+        async with db.execute("SELECT message_id FROM events WHERE id = ?", (event_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await ctx.send(f"Event ID {event_id} not found.")
+            return
 
-# === Main async entrypoint ===
-async def main():
-    await setup_database()
-    check_events.start()
-    await start_webserver()
-    await bot.start(TOKEN)
+        message_id = row[0]
+        channel = bot.get_channel(EVENTS_CHANNEL_ID)
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+        if message_id and channel:
+            try:
+                msg = await channel.fetch_message(message_id)
+                await msg.delete()
+            except discord.NotFound:
+                pass
+
+        await db.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        await db.commit()
+        await ctx.send(f"Event ID {event_id} has been cancelled and removed.")
+
+# === Run the bot ===
+bot.run(TOKEN)
